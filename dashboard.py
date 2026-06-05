@@ -13,13 +13,8 @@ CORS(app)
 
 HYDROPHONE_LAT = 32.843153
 HYDROPHONE_LON = 34.971938
-# Brief specifies ../ais_data/; fall back to parent folder if that doesn't exist
-_base = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = (
-    os.path.join(_base, '..', 'ais_data')
-    if os.path.isdir(os.path.join(_base, '..', 'ais_data'))
-    else os.path.join(_base, '..')
-)
+_base    = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = _base   # db files live in the same directory as dashboard.py
 LABELS_DB   = os.path.join(_base, 'labels.db')
 TRAINING_DB = os.path.join(_base, 'training_db.db')
 GAP_THRESHOLD_SEC = 180
