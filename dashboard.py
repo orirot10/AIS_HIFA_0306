@@ -108,7 +108,8 @@ def api_vessels():
     from_ts = request.args.get('from')
     to_ts   = request.args.get('to')
 
-    sql    = "SELECT mmsi, ship_name, ship_type, COUNT(*) as ping_count FROM {table}"
+    sql    = ("SELECT mmsi, ship_name, ship_type, COUNT(*) as ping_count, "
+              "MAX(json_extract(raw_json, '$.MessageType')) as msg_type FROM {table}")
     params = []
     if from_ts or to_ts:
         clauses = []
@@ -122,10 +123,19 @@ def api_vessels():
     for r in rows:
         mmsi = r['mmsi']
         if mmsi not in vessels:
+            name = r['ship_name'] or ''
+            msg  = r.get('msg_type') or ''
+            if 'ClassB' in msg:
+                ais_class = 'B'
+            elif 'PositionReport' in msg:
+                ais_class = 'A'
+            else:
+                ais_class = 'B'
             vessels[mmsi] = {
                 'mmsi': mmsi,
-                'name': r['ship_name'] or '',
+                'name': name,
                 'type': r['ship_type'] or '',
+                'ais_class': ais_class,
                 'ping_count': 0,
             }
         vessels[mmsi]['ping_count'] += r['ping_count']
