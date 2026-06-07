@@ -346,6 +346,11 @@ input[type="datetime-local"]:focus { outline: none; border-color: #388bfd; }
       <div id="vessel-list"><div style="color:#484f58;font-size:12px">Loading…</div></div>
     </div>
 
+    <div class="s-sec" id="vessel-detail" style="display:none">
+      <h3>Selected Vessel</h3>
+      <div id="vessel-detail-body"></div>
+    </div>
+
     <div class="s-sec">
       <h3>Data Quality</h3>
       <div id="quality-cards">
@@ -359,11 +364,6 @@ input[type="datetime-local"]:focus { outline: none; border-color: #388bfd; }
     <div class="s-sec">
       <h3>Issues</h3>
       <div id="issues-list"><div style="color:#484f58;font-size:12px">Loading…</div></div>
-    </div>
-
-    <div class="s-sec" id="vessel-detail" style="display:none">
-      <h3>Selected Vessel</h3>
-      <div id="vessel-detail-body"></div>
     </div>
   </div>
 </div>
@@ -614,7 +614,7 @@ function buildProcessedTracks() {
   for (const [mmsi, track] of Object.entries(tracks)) {
     const pts = track
       .filter(p => p.lat && p.lon && p.timestamp)
-      .map(p => ({ t: parseTs(p.timestamp), lat: p.lat, lon: p.lon, cog: p.cog }))
+      .map(p => ({ t: parseTs(p.timestamp), lat: p.lat, lon: p.lon, cog: p.cog, sog: p.sog }))
       .sort((a, b) => a.t - b.t);
     if (!pts.length) continue;
     processedTracks[mmsi] = pts;
@@ -637,10 +637,10 @@ function interpolatePosAt(mmsi, tMs) {
     if (pts[mid].t <= tMs) lo = mid; else hi = mid - 1;
   }
   const pb = pts[lo];
-  if (lo === pts.length - 1) return { lat: pb.lat, lon: pb.lon, cog: pb.cog };
+  if (lo === pts.length - 1) return { lat: pb.lat, lon: pb.lon, cog: pb.cog, sog: pb.sog };
   const pa  = pts[lo + 1];
   const r   = (tMs - pb.t) / (pa.t - pb.t);
-  return { lat: pb.lat + r * (pa.lat - pb.lat), lon: pb.lon + r * (pa.lon - pb.lon), cog: pb.cog };
+  return { lat: pb.lat + r * (pa.lat - pb.lat), lon: pb.lon + r * (pa.lon - pb.lon), cog: pb.cog, sog: pb.sog };
 }
 
 function enterGlobalMode() {
@@ -762,9 +762,22 @@ function updateGlobalTimeDisplay(tMs) {
   const s = `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} `
           + `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
   document.getElementById('time-display').textContent = s;
-  // sync slider
   const slider = document.getElementById('timeline');
   slider.value = Math.round((tMs - globalTimeMin) / 1000);
+  updateSelectedVesselVelocity(tMs);
+}
+
+function updateSelectedVesselVelocity(tMs) {
+  const el = document.getElementById('dval-velocity');
+  if (!el || !selectedMMSI) return;
+  const pos = interpolatePosAt(String(selectedMMSI), tMs);
+  if (pos && pos.sog != null) {
+    el.textContent = pos.sog.toFixed(1) + ' kn';
+    el.style.color = pos.sog > 0.5 ? '#3fb950' : '#8b949e';
+  } else {
+    el.textContent = '–';
+    el.style.color = '';
+  }
 }
 
 function startGlobalPlayback() {
@@ -1077,15 +1090,27 @@ function renderVesselDetail(mmsi) {
   const closestPt = track[minIdx];
   const ti = typeInfo(v);
 
+  // Velocity stats across whole track
+  const sogs = track.map(p => p.sog).filter(s => s != null && s > 0);
+  const sogMax = sogs.length ? Math.max(...sogs).toFixed(1) : null;
+  const sogAvg = sogs.length ? (sogs.reduce((a,b) => a+b, 0) / sogs.length).toFixed(1) : null;
+
   bod.innerHTML = `
     <div class="drow"><span class="dlabel">Name</span><span class="dval">${v.name || '—'}</span></div>
     <div class="drow"><span class="dlabel">MMSI</span><span class="dval">${v.mmsi}</span></div>
     <div class="drow"><span class="dlabel">Class</span><span class="dval">${ti.label}</span></div>
     <div class="drow"><span class="dlabel">Pings</span><span class="dval">${v.ping_count.toLocaleString()}</span></div>
     ${lastPt ? `
-    <div class="drow"><span class="dlabel">Last seen</span><span class="dval">${fmtTs(lastPt.timestamp)}</span></div>
     <div class="drow"><span class="dlabel">Last dist.</span><span class="dval">${lastPt.distance_km} km</span></div>
     <div class="drow"><span class="dlabel">Bearing</span><span class="dval">${lastPt.bearing_deg}°</span></div>
+    ` : ''}
+    <div class="drow" style="margin-top:4px;border-top:1px solid #30363d;padding-top:6px">
+      <span class="dlabel">Speed now</span>
+      <span class="dval" id="dval-velocity">–</span>
+    </div>
+    ${sogMax != null ? `
+    <div class="drow"><span class="dlabel">Speed max</span><span class="dval">${sogMax} kn</span></div>
+    <div class="drow"><span class="dlabel">Speed avg</span><span class="dval">${sogAvg} kn</span></div>
     ` : ''}
     ${closestPt && minDist < Infinity ? `
     <div class="drow" style="margin-top:4px;border-top:1px solid #388bfd;padding-top:6px">
