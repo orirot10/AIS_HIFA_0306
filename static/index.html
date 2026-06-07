@@ -979,6 +979,27 @@ function renderIssues() {
   });
 }
 
+function jumpToClosestApproach(mmsi) {
+  const track = tracks[mmsi] || [];
+  if (!track.length) return;
+
+  if (globalMode) exitGlobalMode();
+  if (String(selectedMMSI) !== String(mmsi)) selectVessel(mmsi);
+
+  let minDist = Infinity, minIdx = 0;
+  track.forEach((p, i) => {
+    const d = p.distance_km != null ? p.distance_km : Infinity;
+    if (d < minDist) { minDist = d; minIdx = i; }
+  });
+
+  stopPlayback();
+  playIdx = minIdx;
+  updateTimeLabel(minIdx);
+
+  const pt = track[minIdx];
+  if (pt) map.setView([pt.lat, pt.lon], Math.max(map.getZoom(), 13));
+}
+
 function renderVesselDetail(mmsi) {
   const v   = vessels.find(v => String(v.mmsi) === String(mmsi));
   const sec = document.getElementById('vessel-detail');
@@ -990,17 +1011,44 @@ function renderVesselDetail(mmsi) {
   const lastPt = track[track.length - 1];
   const q = vesselQuality(mmsi);
 
+  // Closest approach stats
+  let minDist = Infinity, minIdx = 0;
+  track.forEach((p, i) => {
+    const d = p.distance_km != null ? p.distance_km : Infinity;
+    if (d < minDist) { minDist = d; minIdx = i; }
+  });
+  const closestPt = track[minIdx];
+  const ti = typeInfo(v);
+
   bod.innerHTML = `
     <div class="drow"><span class="dlabel">Name</span><span class="dval">${v.name || '—'}</span></div>
     <div class="drow"><span class="dlabel">MMSI</span><span class="dval">${v.mmsi}</span></div>
-    <div class="drow"><span class="dlabel">Type</span><span class="dval">${v.type || '—'}</span></div>
+    <div class="drow"><span class="dlabel">Class</span><span class="dval">${ti.label}</span></div>
     <div class="drow"><span class="dlabel">Pings</span><span class="dval">${v.ping_count.toLocaleString()}</span></div>
     ${lastPt ? `
     <div class="drow"><span class="dlabel">Last seen</span><span class="dval">${fmtTs(lastPt.timestamp)}</span></div>
-    <div class="drow"><span class="dlabel">Distance</span><span class="dval">${lastPt.distance_km} km</span></div>
+    <div class="drow"><span class="dlabel">Last dist.</span><span class="dval">${lastPt.distance_km} km</span></div>
     <div class="drow"><span class="dlabel">Bearing</span><span class="dval">${lastPt.bearing_deg}°</span></div>
     ` : ''}
-    <div class="drow"><span class="dlabel">Quality</span><span class="dval"><span class="qbadge qb-${q}">${q.toUpperCase()}</span></span></div>
+    ${closestPt && minDist < Infinity ? `
+    <div class="drow" style="margin-top:4px;border-top:1px solid #388bfd;padding-top:6px">
+      <span class="dlabel" style="color:#79c0ff">Closest</span>
+      <span class="dval" style="color:#79c0ff">${minDist.toFixed(2)} km</span>
+    </div>
+    <div class="drow">
+      <span class="dlabel" style="color:#79c0ff">at</span>
+      <span class="dval" style="color:#79c0ff">${fmtTs(closestPt.timestamp)}</span>
+    </div>
+    <button onclick="jumpToClosestApproach(${mmsi})"
+      style="width:100%;margin-top:8px;padding:6px 8px;background:#1a2f5a;border:1px solid #388bfd;
+             color:#58a6ff;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;
+             transition:background .12s;"
+      onmouseover="this.style.background='#1f3a6e'"
+      onmouseout="this.style.background='#1a2f5a'">
+      Jump to closest approach
+    </button>
+    ` : ''}
+    <div class="drow" style="margin-top:6px"><span class="dlabel">Quality</span><span class="dval"><span class="qbadge qb-${q}">${q.toUpperCase()}</span></span></div>
   `;
 }
 
