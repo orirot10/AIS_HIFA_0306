@@ -668,8 +668,9 @@ function enterGlobalMode() {
   updateGlobalMarkers(globalTimeMin);
   updateGlobalTimeDisplay(globalTimeMin);
 
-  // Dim all polylines
+  // Dim all polylines, hide static last-position markers (global dots take over)
   Object.values(polylines).forEach(pl => pl.setStyle({ opacity: 0.15, weight: 1 }));
+  Object.values(vesselMarkers).forEach(m => m.setOpacity(0));
 }
 
 function exitGlobalMode() {
@@ -697,6 +698,9 @@ function exitGlobalMode() {
   slider.min = 0; slider.max = 0; slider.value = 0; slider.disabled = true;
   document.getElementById('time-display').textContent = 'No vessel selected';
 
+  // Restore static last-position markers
+  Object.values(vesselMarkers).forEach(m => m.setOpacity(1));
+
   // Restore polyline styles
   Object.entries(polylines).forEach(([m, pl]) => {
     const sel2 = String(m) === String(selectedMMSI);
@@ -718,10 +722,15 @@ function updateGlobalMarkers(tMs) {
     const dist  = haversineKm(HYDROPHONE[0], HYDROPHONE[1], pos.lat, pos.lon);
     const tip   = `<b>${vName}</b><br>${dist.toFixed(2)} km from hydrophone`;
     if (!globalMarkers[mmsi]) {
+      const isSelected = String(mmsi) === String(selectedMMSI);
       const ti   = typeInfo(v);
-      const icon = makeDirectionalIcon(ti.shape, color, 9, pos.cog);
-      globalMarkers[mmsi] = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: 400 }).addTo(map);
+      const icon = makeDirectionalIcon(ti.shape, color, isSelected ? 16 : 9, pos.cog);
+      globalMarkers[mmsi] = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: isSelected ? 1000 : 400 }).addTo(map);
       globalMarkers[mmsi].bindTooltip(tip, { permanent: false, direction: 'top', offset: [0, -8] });
+      if (isSelected) {
+        const el = globalMarkers[mmsi].getElement();
+        if (el) el.style.filter = `drop-shadow(0 0 4px #fff) drop-shadow(0 0 8px ${color})`;
+      }
     } else {
       globalMarkers[mmsi].setLatLng([pos.lat, pos.lon]);
       globalMarkers[mmsi].setOpacity(1);
@@ -802,11 +811,14 @@ function autoPopulateRange() {
 async function loadData() {
   showLoading(true);
   stopPlayback();
+  stopGlobalPlayback();
   clearQualityMarkers();
   if (movingMarker) { map.removeLayer(movingMarker); movingMarker = null; }
-  // Clear vessel markers
   Object.values(vesselMarkers).forEach(m => map.removeLayer(m));
   vesselMarkers = {};
+  Object.values(globalMarkers).forEach(m => map.removeLayer(m));
+  globalMarkers = {};
+  selectedMMSI = null;
   document.getElementById('vessel-detail').style.display = 'none';
 
   const db   = document.getElementById('db-sel').value;
@@ -847,9 +859,8 @@ async function loadData() {
     renderVesselList();   // re-render now that distances are available
     buildProcessedTracks();
 
-    // Fit map to all data
-    const allPts = Object.values(tracks).flatMap(t => t.map(p => [p.lat, p.lon]));
-    if (allPts.length) map.fitBounds(L.latLngBounds(allPts), { padding: [30, 30] });
+    // Always enter global mode after loading
+    enterGlobalMode();
 
   } catch (e) {
     console.error('Load error:', e);
@@ -1035,9 +1046,6 @@ function jumpToClosestApproach(mmsi) {
   slider.value = offset;
   updateGlobalMarkers(tMs);
   updateGlobalTimeDisplay(tMs);
-
-  // Pan map to the selected vessel's position at that moment
-  map.setView([pt.lat, pt.lon], Math.max(map.getZoom(), 13));
 }
 
 function renderVesselDetail(mmsi) {
@@ -1093,73 +1101,39 @@ function renderVesselDetail(mmsi) {
 }
 
 // ── Selection ─────────────────────────────────────────────────────────────
+function _setGlobalMarkerSelected(mmsi, selected) {
+  const marker = globalMarkers[String(mmsi)];
+  if (!marker) return;
+  const i     = vessels.findIndex(v => String(v.mmsi) === String(mmsi));
+  const color = COLORS[(i >= 0 ? i : 0) % COLORS.length];
+  const v     = vessels.find(v => String(v.mmsi) === String(mmsi));
+  const ti    = typeInfo(v);
+  const tMs   = (globalTimeMin || 0) + (parseInt(document.getElementById('timeline').value) || 0) * 1000;
+  const pos   = interpolatePosAt(String(mmsi), tMs) || {};
+  marker.setIcon(makeDirectionalIcon(ti.shape, color, selected ? 16 : 9, pos.cog != null ? pos.cog : null));
+  const el = marker.getElement();
+  if (el) el.style.filter = selected ? `drop-shadow(0 0 4px #fff) drop-shadow(0 0 8px ${color})` : '';
+}
+
 function selectVessel(mmsi) {
-  stopPlayback();
-  selectedMMSI = mmsi;
-  currentTrack = tracks[mmsi] || [];
-  playIdx = 0;
+  const prevMMSI = selectedMMSI;
+  selectedMMSI   = mmsi;
+  currentTrack   = tracks[mmsi] || [];  // used by renderVesselDetail + jumpToClosest
 
-  // Dim all, highlight selected
-  Object.entries(polylines).forEach(([m, pl]) => {
-    const sel = String(m) === String(mmsi);
-    pl.setStyle({ opacity: sel ? 1 : 0.2, weight: sel ? 3 : 1.5 });
-    if (sel) pl.bringToFront();
-  });
-
-  // Fit to selected track
-  if (currentTrack.length > 0) {
-    map.fitBounds(L.latLngBounds(currentTrack.map(p => [p.lat, p.lon])), { padding: [40,40] });
+  // Restore previous marker and polyline
+  if (prevMMSI && String(prevMMSI) !== String(mmsi)) {
+    _setGlobalMarkerSelected(prevMMSI, false);
+    if (polylines[prevMMSI]) polylines[prevMMSI].setStyle({ opacity: 0.15, weight: 1 });
   }
 
-  clearQualityMarkers();
-
-  // Gap markers (orange)
-  quality.gaps.filter(g => String(g.mmsi) === String(mmsi)).forEach(gap => {
-    if (!gap.lat || !gap.lon) return;
-    const m = L.circleMarker([parseFloat(gap.lat), parseFloat(gap.lon)], {
-      radius: 9, color: '#d29922', fillColor: '#d29922', fillOpacity: 0.35, weight: 2,
-    }).addTo(map).bindPopup(
-      `<b>GAP</b><br>${gap.ship_name || mmsi}<br>Duration: ${fmtDuration(gap.duration_sec)}<br>${fmtTs(gap.from)} → ${fmtTs(gap.to)}`
-    );
-    gapMarkers.push(m);
-  });
-
-  // Jump markers (red)
-  quality.jumps.filter(j => String(j.mmsi) === String(mmsi)).forEach(jump => {
-    if (!jump.lat || !jump.lon) return;
-    const m = L.circleMarker([parseFloat(jump.lat), parseFloat(jump.lon)], {
-      radius: 9, color: '#f85149', fillColor: '#f85149', fillOpacity: 0.35, weight: 2,
-    }).addTo(map).bindPopup(
-      `<b>JUMP</b><br>${jump.ship_name || mmsi}<br>Speed: ${jump.speed_knots} kn<br>${fmtTs(jump.timestamp)}`
-    );
-    jumpMarkers.push(m);
-  });
-
-  // Moving marker at first position (directional, matches vessel type)
-  if (movingMarker) map.removeLayer(movingMarker);
-  if (currentTrack.length > 0) {
-    const selV   = vessels.find(v => String(v.mmsi) === String(mmsi));
-    const selTi  = typeInfo(selV);
-    const selCol = colorFor(mmsi);
-    const initPt = currentTrack[0];
-    movingMarker = L.marker(
-      [initPt.lat, initPt.lon],
-      { icon: makeDirectionalIcon(selTi.shape, selCol, 13, initPt.cog), zIndexOffset: 1000 }
-    ).addTo(map);
+  // Enlarge + glow selected marker, highlight its polyline
+  _setGlobalMarkerSelected(mmsi, true);
+  if (polylines[mmsi]) {
+    polylines[mmsi].setStyle({ opacity: 0.9, weight: 3 });
+    polylines[mmsi].bringToFront();
   }
 
-  // Timeline scrubber
-  const slider = document.getElementById('timeline');
-  slider.max = Math.max(0, currentTrack.length - 1);
-  slider.value = 0;
-  slider.disabled = currentTrack.length === 0;
-  updateTimeLabel(0);
-
-  // Distance chart
-  distChart.data.labels   = currentTrack.map(p => fmtTs(p.timestamp));
-  distChart.data.datasets[0].data = currentTrack.map(p => p.distance_km);
-  distChart.update();
-
+  // Update sidebar — no time change, no zoom change, no mode change
   renderVesselList();
   renderVesselDetail(mmsi);
 }
@@ -1267,8 +1241,6 @@ document.getElementById('timeline').addEventListener('input', e => {
 });
 
 document.getElementById('db-sel').addEventListener('change', () => {
-  selectedMMSI = null;
-  if (globalMode) exitGlobalMode();
   loadData();
 });
 
@@ -1290,14 +1262,12 @@ document.getElementById('btn-sort-dist').addEventListener('click', function() {
 });
 
 document.getElementById('btn-apply-range').addEventListener('click', () => {
-  selectedMMSI = null;
   loadData();
 });
 
 document.getElementById('btn-reset-range').addEventListener('click', () => {
   document.getElementById('from-dt').value = '';
   document.getElementById('to-dt').value   = '';
-  selectedMMSI = null;
   loadData();
 });
 
