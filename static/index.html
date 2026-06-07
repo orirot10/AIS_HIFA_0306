@@ -565,28 +565,26 @@ function makeMarkerIcon(shape, color, size) {
 }
 
 // Directional marker: shape + tapered arrow that rotates by COG (degrees from N, clockwise)
+// pad adds a transparent click zone around the small visual dot
 function makeDirectionalHtml(shape, color, size, cog) {
+  const pad   = 12;  // transparent click-zone padding on each side
+  const outer = size + pad * 2;
+  const cx    = Math.round(outer / 2);
   const shapeHtml = makeMarkerHtml(shape, color, size);
-  const aLen = Math.round(size * 1.4);
-  const aW   = Math.max(3, Math.round(size * 0.28));
-  const cx   = Math.round(size / 2);
+  const aLen  = Math.round(size * 1.4);
+  const aW    = Math.max(3, Math.round(size * 0.28));
   const hasCog = cog != null && !isNaN(Number(cog));
   const arrowHtml = hasCog
     ? `<div class="vm-arrow" style="position:absolute;top:${cx - aLen}px;left:${cx - Math.round(aW/2)}px;width:${aW}px;height:${aLen}px;background:${color};opacity:0.82;transform-origin:${Math.round(aW/2)}px bottom;transform:rotate(${cog}deg);clip-path:polygon(30% 0%,70% 0%,100% 100%,0% 100%);pointer-events:none;"></div>`
     : `<div class="vm-arrow"></div>`;
-  return `<div class="vm-wrap" style="position:relative;width:${size}px;height:${size}px;overflow:visible;">${shapeHtml}${arrowHtml}</div>`;
+  return `<div class="vm-wrap" style="position:relative;width:${outer}px;height:${outer}px;overflow:visible;"><div style="position:absolute;top:${pad}px;left:${pad}px;">${shapeHtml}</div>${arrowHtml}</div>`;
 }
 
 function makeDirectionalIcon(shape, color, size, cog) {
-  const html = makeDirectionalHtml(shape, color, size, cog);
-  let iconSize, iconAnchor;
-  if (shape === 'triangle') {
-    const h = Math.round(size * 0.6);
-    iconSize = [h * 2, size + 1]; iconAnchor = [h, Math.round((size + 1) * 0.65)];
-  } else {
-    iconSize = [size, size]; iconAnchor = [size / 2, size / 2];
-  }
-  return L.divIcon({ className: '', html, iconSize, iconAnchor });
+  const pad   = 12;
+  const outer = size + pad * 2;
+  const html  = makeDirectionalHtml(shape, color, size, cog);
+  return L.divIcon({ className: '', html, iconSize: [outer, outer], iconAnchor: [outer / 2, outer / 2] });
 }
 
 function lastDist(mmsi) {
@@ -670,7 +668,11 @@ function enterGlobalMode() {
 
   // Dim all polylines, hide static last-position markers (global dots take over)
   Object.values(polylines).forEach(pl => pl.setStyle({ opacity: 0.15, weight: 1 }));
-  Object.values(vesselMarkers).forEach(m => m.setOpacity(0));
+  Object.values(vesselMarkers).forEach(m => {
+    m.setOpacity(0);
+    const el = m.getElement();
+    if (el) el.style.pointerEvents = 'none';
+  });
 }
 
 function exitGlobalMode() {
@@ -699,7 +701,11 @@ function exitGlobalMode() {
   document.getElementById('time-display').textContent = 'No vessel selected';
 
   // Restore static last-position markers
-  Object.values(vesselMarkers).forEach(m => m.setOpacity(1));
+  Object.values(vesselMarkers).forEach(m => {
+    m.setOpacity(1);
+    const el = m.getElement();
+    if (el) el.style.pointerEvents = '';
+  });
 
   // Restore polyline styles
   Object.entries(polylines).forEach(([m, pl]) => {
@@ -725,7 +731,10 @@ function updateGlobalMarkers(tMs) {
       const isSelected = String(mmsi) === String(selectedMMSI);
       const ti   = typeInfo(v);
       const icon = makeDirectionalIcon(ti.shape, color, isSelected ? 16 : 9, pos.cog);
-      globalMarkers[mmsi] = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: isSelected ? 1000 : 400 }).addTo(map);
+      const _m = String(mmsi);
+      globalMarkers[mmsi] = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: isSelected ? 1000 : 400 })
+        .addTo(map)
+        .on('click', () => selectVessel(_m));
       globalMarkers[mmsi].bindTooltip(tip, { permanent: false, direction: 'top', offset: [0, -8] });
       if (isSelected) {
         const el = globalMarkers[mmsi].getElement();
