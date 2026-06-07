@@ -445,12 +445,6 @@ L.marker(HYDROPHONE, {
   }),
 }).addTo(map).bindPopup('<b>Hydrophone</b><br>32.843153°N, 34.971938°E');
 
-// Moving vessel marker (white dot, blue glow)
-const movingIcon = L.divIcon({
-  className: '',
-  html: '<div style="width:11px;height:11px;background:#fff;border:2px solid #58a6ff;border-radius:50%;box-shadow:0 0 6px #58a6ff"></div>',
-  iconSize: [11,11], iconAnchor: [5,5],
-});
 
 // ── Chart ────────────────────────────────────────────────────────────────
 const distChart = new Chart(document.getElementById('dist-chart'), {
@@ -570,6 +564,31 @@ function makeMarkerIcon(shape, color, size) {
   return L.divIcon({ className: '', html, iconSize, iconAnchor });
 }
 
+// Directional marker: shape + tapered arrow that rotates by COG (degrees from N, clockwise)
+function makeDirectionalHtml(shape, color, size, cog) {
+  const shapeHtml = makeMarkerHtml(shape, color, size);
+  const aLen = Math.round(size * 1.4);
+  const aW   = Math.max(3, Math.round(size * 0.28));
+  const cx   = Math.round(size / 2);
+  const hasCog = cog != null && !isNaN(Number(cog));
+  const arrowHtml = hasCog
+    ? `<div class="vm-arrow" style="position:absolute;top:${cx - aLen}px;left:${cx - Math.round(aW/2)}px;width:${aW}px;height:${aLen}px;background:${color};opacity:0.82;transform-origin:${Math.round(aW/2)}px bottom;transform:rotate(${cog}deg);clip-path:polygon(30% 0%,70% 0%,100% 100%,0% 100%);pointer-events:none;"></div>`
+    : `<div class="vm-arrow"></div>`;
+  return `<div class="vm-wrap" style="position:relative;width:${size}px;height:${size}px;overflow:visible;">${shapeHtml}${arrowHtml}</div>`;
+}
+
+function makeDirectionalIcon(shape, color, size, cog) {
+  const html = makeDirectionalHtml(shape, color, size, cog);
+  let iconSize, iconAnchor;
+  if (shape === 'triangle') {
+    const h = Math.round(size * 0.6);
+    iconSize = [h * 2, size + 1]; iconAnchor = [h, Math.round((size + 1) * 0.65)];
+  } else {
+    iconSize = [size, size]; iconAnchor = [size / 2, size / 2];
+  }
+  return L.divIcon({ className: '', html, iconSize, iconAnchor });
+}
+
 function lastDist(mmsi) {
   const t = tracks[mmsi];
   if (!t || !t.length) return null;
@@ -597,7 +616,7 @@ function buildProcessedTracks() {
   for (const [mmsi, track] of Object.entries(tracks)) {
     const pts = track
       .filter(p => p.lat && p.lon && p.timestamp)
-      .map(p => ({ t: parseTs(p.timestamp), lat: p.lat, lon: p.lon }))
+      .map(p => ({ t: parseTs(p.timestamp), lat: p.lat, lon: p.lon, cog: p.cog }))
       .sort((a, b) => a.t - b.t);
     if (!pts.length) continue;
     processedTracks[mmsi] = pts;
@@ -620,10 +639,10 @@ function interpolatePosAt(mmsi, tMs) {
     if (pts[mid].t <= tMs) lo = mid; else hi = mid - 1;
   }
   const pb = pts[lo];
-  if (lo === pts.length - 1) return { lat: pb.lat, lon: pb.lon };
+  if (lo === pts.length - 1) return { lat: pb.lat, lon: pb.lon, cog: pb.cog };
   const pa  = pts[lo + 1];
   const r   = (tMs - pb.t) / (pa.t - pb.t);
-  return { lat: pb.lat + r * (pa.lat - pb.lat), lon: pb.lon + r * (pa.lon - pb.lon) };
+  return { lat: pb.lat + r * (pa.lat - pb.lat), lon: pb.lon + r * (pa.lon - pb.lon), cog: pb.cog };
 }
 
 function enterGlobalMode() {
@@ -700,13 +719,21 @@ function updateGlobalMarkers(tMs) {
     const tip   = `<b>${vName}</b><br>${dist.toFixed(2)} km from hydrophone`;
     if (!globalMarkers[mmsi]) {
       const ti   = typeInfo(v);
-      const icon = makeMarkerIcon(ti.shape, color, 9);
+      const icon = makeDirectionalIcon(ti.shape, color, 9, pos.cog);
       globalMarkers[mmsi] = L.marker([pos.lat, pos.lon], { icon, zIndexOffset: 400 }).addTo(map);
       globalMarkers[mmsi].bindTooltip(tip, { permanent: false, direction: 'top', offset: [0, -8] });
     } else {
       globalMarkers[mmsi].setLatLng([pos.lat, pos.lon]);
       globalMarkers[mmsi].setOpacity(1);
       globalMarkers[mmsi].setTooltipContent(tip);
+      // Update arrow direction without rebuilding the full icon
+      if (pos.cog != null) {
+        const el = globalMarkers[mmsi].getElement();
+        if (el) {
+          const arrow = el.querySelector('.vm-arrow');
+          if (arrow) arrow.style.transform = `rotate(${pos.cog}deg)`;
+        }
+      }
     }
   }
 }
@@ -863,7 +890,7 @@ async function loadVesselTrack(mmsi, db, from, to) {
     const v     = vessels.find(v => String(v.mmsi) === String(mmsi));
     const label = v ? (v.name || String(mmsi)) : String(mmsi);
     const ti    = typeInfo(v);
-    const icon  = makeMarkerIcon(ti.shape, color, 11);
+    const icon  = makeDirectionalIcon(ti.shape, color, 11, last.cog);
     const distKm = last.distance_km != null ? last.distance_km.toFixed(2) + ' km' : '–';
     const vm = L.marker([last.lat, last.lon], { icon, zIndexOffset: 500 })
       .addTo(map)
@@ -1108,10 +1135,17 @@ function selectVessel(mmsi) {
     jumpMarkers.push(m);
   });
 
-  // Moving marker at first position
+  // Moving marker at first position (directional, matches vessel type)
   if (movingMarker) map.removeLayer(movingMarker);
   if (currentTrack.length > 0) {
-    movingMarker = L.marker([currentTrack[0].lat, currentTrack[0].lon], { icon: movingIcon, zIndexOffset: 1000 }).addTo(map);
+    const selV   = vessels.find(v => String(v.mmsi) === String(mmsi));
+    const selTi  = typeInfo(selV);
+    const selCol = colorFor(mmsi);
+    const initPt = currentTrack[0];
+    movingMarker = L.marker(
+      [initPt.lat, initPt.lon],
+      { icon: makeDirectionalIcon(selTi.shape, selCol, 13, initPt.cog), zIndexOffset: 1000 }
+    ).addTo(map);
   }
 
   // Timeline scrubber
@@ -1140,7 +1174,16 @@ function updateTimeLabel(idx) {
   const pt = currentTrack[Math.min(idx, currentTrack.length - 1)];
   document.getElementById('time-display').textContent = pt ? fmtTsFull(pt.timestamp) : '–';
   document.getElementById('timeline').value = idx;
-  if (pt && movingMarker) movingMarker.setLatLng([pt.lat, pt.lon]);
+  if (pt && movingMarker) {
+    movingMarker.setLatLng([pt.lat, pt.lon]);
+    if (pt.cog != null) {
+      const el = movingMarker.getElement();
+      if (el) {
+        const arrow = el.querySelector('.vm-arrow');
+        if (arrow) arrow.style.transform = `rotate(${pt.cog}deg)`;
+      }
+    }
+  }
 }
 
 // ── Playback ──────────────────────────────────────────────────────────────
