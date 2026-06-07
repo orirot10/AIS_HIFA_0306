@@ -983,21 +983,34 @@ function jumpToClosestApproach(mmsi) {
   const track = tracks[mmsi] || [];
   if (!track.length) return;
 
-  if (globalMode) exitGlobalMode();
-  if (String(selectedMMSI) !== String(mmsi)) selectVessel(mmsi);
-
+  // Find track index with minimum distance
   let minDist = Infinity, minIdx = 0;
   track.forEach((p, i) => {
     const d = p.distance_km != null ? p.distance_km : Infinity;
     if (d < minDist) { minDist = d; minIdx = i; }
   });
 
-  stopPlayback();
-  playIdx = minIdx;
-  updateTimeLabel(minIdx);
-
   const pt = track[minIdx];
-  if (pt) map.setView([pt.lat, pt.lon], Math.max(map.getZoom(), 13));
+  if (!pt) return;
+  const tMs = parseTs(pt.timestamp);
+
+  // Enter global mode so ALL vessels show their positions at this moment
+  stopPlayback();
+  if (!globalMode) {
+    enterGlobalMode();
+  } else {
+    stopGlobalPlayback();
+  }
+
+  // Set slider + render all vessels at this timestamp
+  const slider = document.getElementById('timeline');
+  const offset = Math.max(0, Math.min(Math.round((tMs - globalTimeMin) / 1000), parseInt(slider.max)));
+  slider.value = offset;
+  updateGlobalMarkers(tMs);
+  updateGlobalTimeDisplay(tMs);
+
+  // Pan map to the selected vessel's position at that moment
+  map.setView([pt.lat, pt.lon], Math.max(map.getZoom(), 13));
 }
 
 function renderVesselDetail(mmsi) {
