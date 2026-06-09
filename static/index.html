@@ -726,7 +726,8 @@ function updateGlobalMarkers(tMs) {
     const v     = vessels.find(v => String(v.mmsi) === mmsi);
     const vName = v ? (v.name || mmsi) : mmsi;
     const dist  = haversineKm(HYDROPHONE[0], HYDROPHONE[1], pos.lat, pos.lon);
-    const tip   = `<b>${vName}</b><br>${dist.toFixed(2)} km from hydrophone`;
+    const sogStr = pos.sog != null ? `${pos.sog.toFixed(1)} kn` : '–';
+    const tip   = `<b>${vName}</b><br>${dist.toFixed(2)} km from hydrophone<br>${sogStr}`;
     if (!globalMarkers[mmsi]) {
       const isSelected = String(mmsi) === String(selectedMMSI);
       const ti   = typeInfo(v);
@@ -924,10 +925,11 @@ async function loadVesselTrack(mmsi, db, from, to) {
     const label = v ? (v.name || String(mmsi)) : String(mmsi);
     const ti    = typeInfo(v);
     const icon  = makeDirectionalIcon(ti.shape, color, 11, last.cog);
-    const distKm = last.distance_km != null ? last.distance_km.toFixed(2) + ' km' : '–';
+    const distKm  = last.distance_km != null ? last.distance_km.toFixed(2) + ' km' : '–';
+    const sogLast = last.sog != null ? `${last.sog.toFixed(1)} kn` : '–';
     const vm = L.marker([last.lat, last.lon], { icon, zIndexOffset: 500 })
       .addTo(map)
-      .bindTooltip(`<b>${label}</b><br>${distKm} from hydrophone`, {
+      .bindTooltip(`<b>${label}</b><br>${distKm} from hydrophone<br>${sogLast}`, {
         permanent: false, direction: 'top', offset: [0,-10],
       })
       .on('click', () => selectVessel(mmsi));
